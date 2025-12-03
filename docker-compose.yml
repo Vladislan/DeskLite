@@ -1,0 +1,65 @@
+services:
+  desklite-pg:
+    image: postgres:15
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: helpdesk
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+    volumes:
+      - desklite_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d helpdesk"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  desklite-redis:
+    image: redis:7
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  desklite-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      DATABASE_URL: postgresql+asyncpg://app:app@desklite-pg:5432/helpdesk
+      REDIS_URL: redis://desklite-redis:6379/0
+    depends_on:
+      desklite-pg:
+        condition: service_healthy
+      desklite-redis:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    command: >
+      sh -c "
+        alembic upgrade head &&
+        uvicorn app.main:app --host 0.0.0.0 --port 8000
+      "
+    healthcheck:
+      # якщо у тебе ендпоінт /api/health — використовуємо його
+      test: [ "CMD-SHELL", "curl -fsS http://localhost:8000/api/health || exit 1" ]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 10s
+
+  desklite-front:
+    build:
+      context: ./front
+    depends_on:
+      desklite-backend:
+        condition: service_healthy   # тепер ОК, бо в бекенду є healthcheck
+    ports:
+      - "5173:80"
+
+
+volumes:
+  desklite_pg_data:
